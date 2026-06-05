@@ -3,7 +3,7 @@ import { Send, User, Calendar, Mail, Github, Phone, Code2, Clock, CheckCircle2 }
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useGetChatHistory, useBookMeeting, useGetAvailability } from "@workspace/api-client-react";
-import type { ChatMessage as ApiChatMessage, TimeSlot } from "@workspace/api-client-react/src/generated/api.schemas";
+import type { ChatMessage as ApiChatMessage, TimeSlot } from "@workspace/api-client-react";
 import { useToast } from "@/hooks/use-toast";
 import { format } from "date-fns";
 import {
@@ -42,7 +42,7 @@ export default function Home() {
 
   // Also pre-fetch or handle availability if requested directly without chat
   const { data: availabilityData, refetch: refetchAvailability, isFetching: isFetchingAvailability } = useGetAvailability({
-    query: { enabled: false }
+    query: { enabled: false, queryKey: ["getAvailability"] }
   });
 
   useEffect(() => {
@@ -56,7 +56,7 @@ export default function Home() {
 
   const { data: history } = useGetChatHistory(
     { sessionId },
-    { query: { enabled: !!sessionId } }
+    { query: { enabled: !!sessionId, queryKey: ["getChatHistory", sessionId] } }
   );
 
   useEffect(() => {
@@ -231,7 +231,7 @@ export default function Home() {
       {/* Voice Banner */}
       <div className="bg-secondary/50 border-b border-border px-6 py-2 flex items-center justify-center gap-2 text-xs text-muted-foreground">
         <Phone className="w-3 h-3" />
-        You can also call Radhika's AI agent at <span className="font-bold text-primary ml-1">+1 (555) 123-4567</span>
+        You can also call Radhika's AI agent at <span className="font-bold text-primary ml-1">{import.meta.env.VITE_TWILIO_PHONE_NUMBER || "+1-202-555-1234"}</span>
       </div>
 
       {/* Chat Area */}
