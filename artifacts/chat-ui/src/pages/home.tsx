@@ -94,6 +94,11 @@ export default function Home() {
         body: JSON.stringify({ message: messageText, sessionId }),
       });
 
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.error || `Server error ${response.status}`);
+      }
+
       if (!response.body) throw new Error("No response body");
 
       const reader = response.body.getReader();
@@ -103,7 +108,8 @@ export default function Home() {
       const assistantMsgId = crypto.randomUUID();
       let currentContent = "";
       let currentSlots: TimeSlot[] | null = null;
-      
+      let streamErrored = false;
+
       setMessages(prev => [...prev, {
         id: assistantMsgId,
         sessionId,
@@ -124,6 +130,10 @@ export default function Home() {
           if (line.startsWith('data: ')) {
             try {
               const data = JSON.parse(line.slice(6));
+              if (data.error) {
+                streamErrored = true;
+                throw new Error(data.error);
+              }
               if (data.content !== undefined) {
                 currentContent += data.content;
               }
@@ -143,6 +153,7 @@ export default function Home() {
                 setIsStreaming(false);
               }
             } catch (e) {
+              if (streamErrored) throw e;
               console.error("Error parsing SSE data", e);
             }
           }
@@ -150,9 +161,12 @@ export default function Home() {
       }
     } catch (err) {
       console.error(err);
+      // Remove empty assistant bubble if nothing was streamed
+      setMessages(prev => prev.filter(m => !(m.role === "assistant" && m.content === "")));
+      const msg = err instanceof Error ? err.message : "Failed to communicate with the AI.";
       toast({
-        title: "Connection Error",
-        description: "Failed to communicate with the AI. Please try again.",
+        title: "Error",
+        description: msg,
         variant: "destructive"
       });
       setIsStreaming(false);
@@ -252,8 +266,9 @@ export default function Home() {
               {suggestions.map((suggestion, i) => (
                 <button
                   key={i}
-                  onClick={() => handleSend(suggestion)}
-                  className="text-left p-4 rounded-lg border border-border bg-card/50 hover:bg-secondary hover:border-primary/50 transition-all text-sm group"
+                  onClick={() => !isStreaming && handleSend(suggestion)}
+                  disabled={isStreaming}
+                  className="text-left p-4 rounded-lg border border-border bg-card/50 hover:bg-secondary hover:border-primary/50 transition-all text-sm group disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   <div className="text-primary mb-1 opacity-70 group-hover:opacity-100">[{i + 1}]</div>
                   {suggestion}
@@ -300,11 +315,11 @@ export default function Home() {
                         >
                           <span className="flex items-center gap-2 font-semibold text-foreground mb-1">
                             <Calendar className="w-4 h-4 text-primary" />
-                            {format(new Date(slot.start), "MMM d, yyyy")}
+                            {new Date(slot.start).toLocaleDateString("en-IN", { weekday: "short", month: "short", day: "numeric", timeZone: "Asia/Kolkata" })}
                           </span>
                           <span className="flex items-center gap-2 text-muted-foreground text-xs">
                             <Clock className="w-3 h-3" />
-                            {format(new Date(slot.start), "h:mm a")} - {format(new Date(slot.end), "h:mm a")}
+                            {new Date(slot.start).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Kolkata" })} – {new Date(slot.end).toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit", timeZone: "Asia/Kolkata" })} IST
                           </span>
                         </button>
                       ))}

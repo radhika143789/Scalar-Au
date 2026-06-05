@@ -29,6 +29,19 @@ router.post("/calendar/book", async (req, res) => {
     return;
   }
 
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(attendeeEmail)) {
+    res.status(400).json({ error: "Invalid attendeeEmail format" });
+    return;
+  }
+
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime()) || endDate <= startDate) {
+    res.status(400).json({ error: "Invalid start/end datetime" });
+    return;
+  }
+
   try {
     const result = await createCalendarEvent(start, end, attendeeEmail, attendeeName, summary);
     res.status(201).json(result);
