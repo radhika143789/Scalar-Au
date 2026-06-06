@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { chatMessagesTable } from "@workspace/db";
 import { eq, asc } from "drizzle-orm";
-import { openai } from "../lib/openai-client.js";
+import { ai } from "../lib/gemini-client.js";
 import { PERSONA_SYSTEM_PROMPT } from "../lib/persona.js";
 import { getAvailableSlots } from "../lib/google-calendar.js";
 
@@ -52,14 +52,24 @@ router.post("/chat/message", async (req, res) => {
       }
     }
 
-    const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
-      { role: "system", content: PERSONA_SYSTEM_PROMPT + slotContext },
-      ...history.slice(0, -1).map((m) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      })),
-      { role: "user", content: message },
-    ];
+    // Build Gemini contents — system prompt injected as first user turn
+    const systemPrompt = PERSONA_SYSTEM_PROMPT + slotContext;
+    const contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> = [];
+
+    // Inject system prompt as leading user/model exchange
+    contents.push({ role: "user", parts: [{ text: systemPrompt }] });
+    contents.push({ role: "model", parts: [{ text: "Understood. I'm ready to represent Radhika." }] });
+
+    // Add conversation history (exclude the just-inserted user message — last item)
+    for (const m of history.slice(0, -1)) {
+      contents.push({
+        role: m.role === "assistant" ? "model" : "user",
+        parts: [{ text: m.content }],
+      });
+    }
+
+    // Add current user message
+    contents.push({ role: "user", parts: [{ text: message }] });
 
     // Stream response
     res.setHeader("Content-Type", "text/event-stream");
@@ -67,21 +77,19 @@ router.post("/chat/message", async (req, res) => {
     res.setHeader("Connection", "keep-alive");
     res.setHeader("Access-Control-Allow-Origin", "*");
 
-    const stream = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages,
-      stream: true,
-      max_tokens: 512,
-      temperature: 0.7,
+    const stream = await ai.models.generateContentStream({
+      model: "gemini-2.5-flash",
+      contents,
+      config: { maxOutputTokens: 512 },
     });
 
     let fullReply = "";
 
     for await (const chunk of stream) {
-      const content = chunk.choices[0]?.delta?.content;
-      if (content) {
-        fullReply += content;
-        res.write(`data: ${JSON.stringify({ content })}\n\n`);
+      const text = chunk.text;
+      if (text) {
+        fullReply += text;
+        res.write(`data: ${JSON.stringify({ content: text })}\n\n`);
       }
     }
 

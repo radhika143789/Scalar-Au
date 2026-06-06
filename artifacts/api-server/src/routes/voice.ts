@@ -2,7 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { voiceCallsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { openai } from "../lib/openai-client.js";
+import { ai } from "../lib/gemini-client.js";
 import { VOICE_SYSTEM_PROMPT } from "../lib/persona.js";
 import { getAvailableSlots, createCalendarEvent } from "../lib/google-calendar.js";
 
@@ -35,7 +35,6 @@ function escapeXml(str: string): string {
 router.post("/voice/inbound", async (req, res) => {
   const { CallSid, From } = req.body as { CallSid: string; From: string };
 
-  // Create or find call record
   await db
     .insert(voiceCallsTable)
     .values({ callSid: CallSid, callerNumber: From, status: "in-progress", transcript: [] })
@@ -64,7 +63,6 @@ router.post("/voice/gather", async (req, res) => {
   }
 
   try {
-    // Load call transcript
     const [call] = await db
       .select()
       .from(voiceCallsTable)
@@ -74,7 +72,6 @@ router.post("/voice/gather", async (req, res) => {
     const transcript: Array<{ role: string; content: string }> =
       (call?.transcript as Array<{ role: string; content: string }>) || [];
 
-    // Detect booking intent
     const wantsBooking = /book|schedul|availab|meeting|slot|appointment|when/i.test(SpeechResult);
 
     let slotContext = "";
@@ -90,13 +87,11 @@ router.post("/voice/gather", async (req, res) => {
       }
     }
 
-    // Detect if caller is providing booking info
     const emailMatch = SpeechResult.match(
       /[\w.+-]+\s*(?:at|@)\s*[\w.+-]+\s*(?:dot|\.)\s*\w+/i
     );
     const hasEmail = !!emailMatch;
 
-    // Try to detect if they're confirming a specific slot number
     const slotNumMatch = SpeechResult.match(/\b([123]|first|second|third|one|two|three)\b/i);
     const slotNumber = slotNumMatch
       ? ["first", "one", "1"].some((w) => slotNumMatch[1].toLowerCase() === w)
@@ -106,7 +101,6 @@ router.post("/voice/gather", async (req, res) => {
         : 2
       : null;
 
-    // Auto-book if we have enough info
     let bookingNote = "";
     if (hasEmail && slotNumber !== null && transcript.some((t) => /slot|available/i.test(t.content))) {
       const slot = slots[slotNumber] || slots[0];
@@ -116,17 +110,9 @@ router.post("/voice/gather", async (req, res) => {
           .replace(/\s*dot\s*/i, ".")
           .replace(/\s/g, "");
         const callerName = From || "Caller";
-
         try {
-          const booking = await createCalendarEvent(
-            slot.start,
-            slot.end,
-            emailRaw,
-            callerName
-          );
+          const booking = await createCalendarEvent(slot.start, slot.end, emailRaw, callerName);
           bookingNote = `\n\nBOOKING CONFIRMED: A meeting has been booked for ${slot.label}. Event ID: ${booking.eventId}. Tell the caller the booking is confirmed and invites have been sent.`;
-
-          // Update call record
           await db
             .update(voiceCallsTable)
             .set({ bookingEventId: booking.eventId })
@@ -137,27 +123,27 @@ router.post("/voice/gather", async (req, res) => {
       }
     }
 
-    // Update transcript
     transcript.push({ role: "user", content: SpeechResult });
 
-    const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
-      { role: "system", content: VOICE_SYSTEM_PROMPT + slotContext + bookingNote },
+    // Build Gemini contents
+    const systemPrompt = VOICE_SYSTEM_PROMPT + slotContext + bookingNote;
+    const contents: Array<{ role: "user" | "model"; parts: Array<{ text: string }> }> = [
+      { role: "user", parts: [{ text: systemPrompt }] },
+      { role: "model", parts: [{ text: "Understood. I'm ready." }] },
       ...transcript.slice(-6).map((t) => ({
-        role: t.role as "user" | "assistant",
-        content: t.content,
+        role: (t.role === "assistant" ? "model" : "user") as "user" | "model",
+        parts: [{ text: t.content }],
       })),
     ];
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4o",
-      messages,
-      max_tokens: 150,
-      temperature: 0.7,
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents,
+      config: { maxOutputTokens: 150 },
     });
 
-    const reply = completion.choices[0]?.message?.content || "I'm sorry, could you repeat that?";
+    const reply = response.text || "I'm sorry, could you repeat that?";
 
-    // Save to transcript
     transcript.push({ role: "assistant", content: reply });
 
     await db
@@ -165,7 +151,6 @@ router.post("/voice/gather", async (req, res) => {
       .set({ transcript })
       .where(eq(voiceCallsTable.callSid, CallSid));
 
-    // Check if call should end
     const shouldEnd = /goodbye|bye|thank you|that.s all|hang up/i.test(SpeechResult);
 
     if (shouldEnd) {
