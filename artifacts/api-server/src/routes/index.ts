@@ -3,10 +3,12 @@ import healthRouter from "./health.js";
 import chatRouter from "./chat.js";
 import calendarRouter from "./calendar.js";
 import voiceRouter from "./voice.js";
+import authRouter from "./auth.js";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use(authRouter);
 router.use(chatRouter);
 router.use(calendarRouter);
 router.use(voiceRouter);
